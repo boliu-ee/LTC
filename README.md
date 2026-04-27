@@ -537,18 +537,23 @@ $$
 flowchart TB
     subgraph G1["Discrete-time Models"]
        direction LR
+        A0["FNN"]
         A["RNN"]
         B["LSTM"]
+        A0 --> |sequential| A
         A -->|add gates| B
     end
 
     subgraph G2["Continuous-time Models"]
         direction LR
-        C["CT-RNN"]
+        subgraph G4["CT-RNN"]
+        direction LR
         D["Neural ODE"]
-        E["LTC"]
-        C -->|learn derivative| D
-        D -->|adaptive τ| E
+        E["Classical CT-RNN"]
+        F["LTC"]
+        D -->|relax| E 
+        E -->|adaptive τ| F
+        end
     end
 
     G1 -->|continuous-time| G2
