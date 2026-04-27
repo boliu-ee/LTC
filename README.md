@@ -538,12 +538,14 @@ Evolution with two stages: Discrete-time models and Discrete-time models
 ```mermaid
 flowchart TB
     subgraph G1["Discrete-time Models"]
+       direction LR
         A["RNN"]
         B["LSTM"]
         A -->|add gates| B
     end
 
     subgraph G2["Continuous-time Models"]
+        direction LR
         C["CT-RNN"]
         D["Neural ODE"]
         E["LTC"]
@@ -551,7 +553,7 @@ flowchart TB
         D -->|adaptive τ| E
     end
 
-    B -->|continuous-time| C
+    G1 -->|continuous-time| G2
 ```
 
 | Model | Key idea |
