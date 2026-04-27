@@ -557,7 +557,9 @@ If your Markdown platform does not support Mermaid, you can use this plain-text 
 
 ```text
 RNN
+$$
 h_t = phi(W_x x_t + W_h h_{t-1} + b)
+$$
 -> discrete recurrence, basic memory
 
         |
