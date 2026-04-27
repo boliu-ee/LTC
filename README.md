@@ -50,7 +50,7 @@ The main idea of an RNN is simple:
 The classical RNN update is:
 
 $$
-h_t = \phi(W_x x_t + W_h h_{t-1} + b)
+h_t = \phi(W_{xh} [x_t, h_{t-1}] + b)
 $$
 
 and the output can be written as:
@@ -225,26 +225,26 @@ This leads to **continuous-time recurrent neural networks (CT-RNNs)**.
 
 ## 6. CT-RNN: hidden states evolve continuously
 
-Instead of a discrete hidden state $h_t$, we now use a continuous-time state $x(t)$.
+Instead of a discrete hidden state $h_t$, we now use a continuous-time state $h(t)$.
 
 The model is no longer written as a step-to-step update. Instead, it is described by a differential equation:
 
 $$
-\frac{dx(t)}{dt} = F(x(t), I(t), t)
+\frac{dh(t)}{dt} = F(h(t), I(t), t)
 $$
 
 Here:
 
-- $x(t)$ is the hidden state at continuous time $t$
+- $h(t)$ is the hidden state at continuous time $t$
 - $I(t)$ is the input signal
-- $\frac{dx}{dt}$ tells us how the state changes at this moment
+- $\frac{dh}{dt}$ tells us how the state changes at this moment
 
 ### A classical CT-RNN form
 
 A very common form is:
 
 $$
-\frac{dx(t)}{dt} = -\frac{x(t)}{\tau} + f(x(t), I(t), t, \theta)
+\frac{dh(t)}{dt} = -\frac{h(t)}{\tau} + f(h(t), I(t), t, \theta)
 $$
 
 ### What does this mean?
@@ -254,7 +254,7 @@ This equation has two parts.
 #### 1. Leakage / decay term
 
 $$
--\frac{x(t)}{\tau}
+-\frac{h(t)}{\tau}
 $$
 
 If nothing drives the system, the state decays toward equilibrium.
@@ -262,7 +262,7 @@ If nothing drives the system, the state decays toward equilibrium.
 #### 2. Driving term
 
 $$
-f(x(t), I(t), t, \theta)
+f(h(t), I(t), t, \theta)
 $$
 
 This is the nonlinear input-dependent force pushing the state.
@@ -300,7 +300,7 @@ $$
 \frac{dh(t)}{dt} = f(h(t), I(t), t, \theta)
 $$
 
-### Core idea
+### Key idea
 
 Instead of defining the next hidden state directly, the network defines the **instantaneous derivative**.
 
