@@ -512,10 +512,7 @@ $$
 A structured continuous-time model with adaptive time constants:
 
 $$
-\frac{dx(t)}{dt}
-=
--\left(\frac{1}{\tau} + f(x(t), I(t), t, \theta)\right)x(t)
-+ f(x(t), I(t), t, \theta) A
+\frac{dx(t)}{dt} = -\left(\frac{1}{\tau} + f(x(t), I(t), t, \theta)\right)x(t) + f(x(t), I(t), t, \theta) A
 $$
 
 **Idea:** let the system's own time scale become dynamic.
