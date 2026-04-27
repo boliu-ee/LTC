@@ -536,7 +536,7 @@ $$
 Evolution with two stages: Discrete-time models and Discrete-time models
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph G1["Discrete-time Models"]
         A["RNN"]
         B["LSTM"]
