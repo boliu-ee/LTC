@@ -358,8 +358,7 @@ The central idea of LTC is:
 A key LTC form is:
 
 $$
-\frac{dx(t)}{dt}
-=
+\frac{dx(t)}{dt} =
 -\left(\frac{1}{\tau} + f(x(t), I(t), t, \theta)\right)x(t)
 + f(x(t), I(t), t, \theta) A
 $$
