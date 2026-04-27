@@ -1,6 +1,9 @@
-# From RNN to LSTM to CT-RNN to Neural ODE to LTC
+# Liquid Time-Constant Networks (LTC): What, Why, and How 
 
-A beginner-friendly background note with key formulas
+A beginner-friendly background note with key formulas.
+
+- From FNN, RNN, LSTM, to CT-RNN
+- From Neuron ODE, Classical CT-RNN, to LTC
 
 ---
 
@@ -252,35 +255,8 @@ They are useful because they:
 ---
 ## 7. Three following models for CT-RNN
 
-To specify the CT-RNN formula for training, there are typical three models. 
+To specify the CT-RNN formula for training, there are three typical models. 
 
-### Summarize first
-
-#### Neural ODE (Ordinary Differential Equation)
-
-$$
-\dot{x} = f(x, I, t, \theta)
-$$
-
-The network directly defines the derivative.
-
-#### Classical CT-RNN
-
-$$
-\dot{x} = -\frac{x}{\tau} + f(x, I, t, \theta)
-$$
-
-There is a fixed decay term plus a nonlinear driving term.
-
-#### LTC (Liquid Time-Constant)
-
-$$
-\dot{x} = -\left(\frac{1}{\tau}+f(x,I,t,\theta)\right)x + f(x,I,t,\theta)A
-$$
-
-Now the nonlinear term also changes the **effective time constant**.
-
----
 
 ### Neural ODE: an even more general continuous-time view
 
