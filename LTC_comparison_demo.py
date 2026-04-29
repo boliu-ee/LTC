@@ -4,20 +4,28 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 import matplotlib.pyplot as plt
+import json
+import os
 from ncps.torch import LTC
 
-# ----------------------------- 0. 全局设置 -----------------------------
+# ================== 0. 全局设置 ==================
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.manual_seed(42)
 np.random.seed(42)
 
-# ----------------------------- 1. 数据生成 -----------------------------
+OUTPUT_DIR = "ltc_demo_outputs"          # 输出文件夹
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# ================== 1. 数据生成 ==================
 def gen_sine(freq, duration, dt=0.05, noise=0.01):
     t = np.arange(0, duration, dt)
     x = np.sin(2 * np.pi * freq * t) + noise * np.random.randn(len(t))
     return t, x.astype(np.float32)
 
+# 训练集
 t_train, x_train = gen_sine(0.5, duration=100)
+
+# 测试集（分段频率）
 _, x1 = gen_sine(0.5, 20)
 _, x2 = gen_sine(2.0, 20)
 _, x3 = gen_sine(1.0, 20)
@@ -25,11 +33,13 @@ _, x4 = gen_sine(0.2, 20)
 x_test = np.concatenate([x1, x2, x3, x4])
 t_test = np.arange(len(x_test)) * 0.05
 
+# 归一化
 mean, std = x_train.mean(), x_train.std()
 x_train_norm = (x_train - mean) / std
 x_test_norm = (x_test - mean) / std
 
 window_size = 30
+
 def create_dataset(seq, window_size):
     X, y = [], []
     for i in range(len(seq) - window_size):
@@ -42,13 +52,13 @@ X_train_t = torch.tensor(X_train_norm[..., np.newaxis], dtype=torch.float32).to(
 y_train_t = torch.tensor(y_train_norm, dtype=torch.float32).to(device)
 train_loader = DataLoader(TensorDataset(X_train_t, y_train_t), batch_size=64, shuffle=True)
 
-# ----------------------------- 2. 工具：参数量计算 & 自动对齐 -----------------------------
+# ================== 2. 工具函数 ==================
 def count_params(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 TARGET_PARAMS = 1233  # 以16单元LSTM为基准
 
-# ---------- FNN ----------
+# ---------- 模型定义 ----------
 class FNN(nn.Module):
     def __init__(self, window_size, hidden_size):
         super().__init__()
@@ -61,7 +71,6 @@ class FNN(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-# ---------- RNN ----------
 class SimpleRNN(nn.Module):
     def __init__(self, hidden_size):
         super().__init__()
@@ -71,7 +80,6 @@ class SimpleRNN(nn.Module):
         out, hn = self.rnn(x, h0)
         return self.fc(out[:, -1, :])
 
-# ---------- LSTM ----------
 class LSTMModel(nn.Module):
     def __init__(self, hidden_size=16):
         super().__init__()
@@ -81,7 +89,6 @@ class LSTMModel(nn.Module):
         out, (hn, cn) = self.lstm(x, states)
         return self.fc(out[:, -1, :])
 
-# ---------- LTC ----------
 class LTCModel(nn.Module):
     def __init__(self, units):
         super().__init__()
@@ -91,41 +98,38 @@ class LTCModel(nn.Module):
         out, hx = self.ltc(x, hx)
         return self.fc(out)
 
-# 自动寻找LTC最优units
+# 自动选择LTC单元数
 best_ltc_units = 16
 best_diff = float('inf')
 for u in range(10, 51):
     test_model = LTCModel(u).to(device)
-    params = count_params(test_model)
-    diff = abs(params - TARGET_PARAMS)
+    diff = abs(count_params(test_model) - TARGET_PARAMS)
     if diff < best_diff:
         best_diff = diff
         best_ltc_units = u
-print(f"LTC 自动选择的单元数: {best_ltc_units}，参数量差: {best_diff}")
+print(f"LTC units = {best_ltc_units}, param diff = {best_diff}")
 
-# FNN 和 RNN 的最优 hidden_size
-fnn_hidden = round((TARGET_PARAMS - 1) / 32)       # ≈39
+# FNN & RNN 最优尺寸
+fnn_hidden = round((TARGET_PARAMS - 1) / 32)
 a, b, c = 1, 4, 1 - TARGET_PARAMS
-discriminant = b**2 - 4*a*c
-rnn_hidden = int((-b + discriminant**0.5) / (2*a))  # ≈34
-print(f"FNN hidden: {fnn_hidden}, RNN hidden: {rnn_hidden}")
+rnn_hidden = int((-b + np.sqrt(b**2 - 4*a*c)) / (2*a))
+print(f"FNN hidden = {fnn_hidden}, RNN hidden = {rnn_hidden}")
 
-# ----------------------------- 3. 初始化模型 -----------------------------
+# ================== 3. 初始化模型 ==================
 models = {
     'FNN': FNN(window_size, fnn_hidden).to(device),
     'RNN': SimpleRNN(rnn_hidden).to(device),
-    'LSTM': LSTMModel().to(device),          # 16 单元
+    'LSTM': LSTMModel().to(device),
     'LTC': LTCModel(best_ltc_units).to(device)
 }
 
-# 打印参数量
-print("\n====== 模型参数量对比 ======")
-for name, model in models.items():
-    p = count_params(model)
-    print(f"{name:>6}: {p:>6} 参数")
-print("==========================\n")
+param_counts = {name: count_params(model) for name, model in models.items()}
+print("\n====== 参数量 ======")
+for k, v in param_counts.items():
+    print(f"{k:>6}: {v}")
+print("====================\n")
 
-# ----------------------------- 4. 训练 -----------------------------
+# ================== 4. 训练 ==================
 history = {}
 for name, model in models.items():
     print(f'训练 {name} ...')
@@ -148,12 +152,12 @@ for name, model in models.items():
     history[name] = losses
     print(f'  最终 Loss: {losses[-1]:.6f}\n')
 
-# ----------------------------- 5. 在线预测测试 (修正隐藏状态形状) -----------------------------
-def online_predict_recurrent(model, seq_norm, window_size, cell_type):
+# ================== 5. 在线预测函数（带tau收集） ==================
+def online_predict_recurrent(model, seq_norm, window_size, cell_type, ltc_tau_out=None):
     n = len(seq_norm)
-    preds = np.full(n, np.nan, dtype=np.float32)          # 长度 = 真实序列，缺失值用 NaN
+    preds = np.full(n, np.nan, dtype=np.float32)
 
-    # 初始化隐藏状态
+    # 初始化状态
     if cell_type == 'rnn':
         h = torch.zeros(1, 1, model.rnn.hidden_size).to(device)
     elif cell_type == 'lstm':
@@ -162,7 +166,7 @@ def online_predict_recurrent(model, seq_norm, window_size, cell_type):
     elif cell_type == 'ltc':
         h = torch.zeros(1, model.ltc.state_size).to(device)
 
-    # 预热：用前 window_size 个点更新隐藏状态（不产生预测）
+    # 预热
     x_pre = torch.tensor(seq_norm[:window_size], dtype=torch.float32).unsqueeze(0).unsqueeze(-1).to(device)
     with torch.no_grad():
         if cell_type == 'rnn':
@@ -172,7 +176,6 @@ def online_predict_recurrent(model, seq_norm, window_size, cell_type):
         elif cell_type == 'ltc':
             _, h = model.ltc(x_pre, h)
 
-    # 逐点预测：用 x_t 预测 x_{t+1}
     with torch.no_grad():
         for t in range(window_size, n-1):
             x_t = torch.tensor(seq_norm[t], dtype=torch.float32).reshape(1, 1, 1).to(device)
@@ -182,7 +185,21 @@ def online_predict_recurrent(model, seq_norm, window_size, cell_type):
                 out, h = model.lstm(x_t, h)
             elif cell_type == 'ltc':
                 out, h = model.ltc(x_t, h)
-            preds[t+1] = model.fc(out).cpu().numpy().item()   # 预测值存入 t+1
+                # 安全获取 tau
+                if ltc_tau_out is not None:
+                    tau_now = None
+                    for attr in ['_tau', 'tau', 'cell.tau', 'cell._tau']:
+                        try:
+                            obj = model.ltc
+                            for part in attr.split('.'):
+                                obj = getattr(obj, part)
+                            tau_now = obj.detach().cpu().numpy().squeeze(0)
+                            break
+                        except Exception:
+                            continue
+                    if tau_now is not None:
+                        ltc_tau_out.append(tau_now)
+            preds[t+1] = model.fc(out).cpu().numpy().item()
     return preds
 
 
@@ -191,17 +208,20 @@ def online_predict_fnn(model, seq_norm, window_size):
     preds = np.full(n, np.nan, dtype=np.float32)
     with torch.no_grad():
         for t in range(window_size, n-1):
-            # 窗口取 [t-window_size, t-1] 来预测 x_t
             win = torch.tensor(seq_norm[t-window_size:t], dtype=torch.float32).reshape(1, window_size).to(device)
             preds[t] = model(win).cpu().numpy().item()
     return preds
 
-# 计算各模型预测结果
+# ================== 6. 计算预测 ==================
+ltc_tau_list = []   # 收集LTC的 tau 向量（每一步的形状 (units,)）
+
 preds_fnn = online_predict_fnn(models['FNN'], x_test_norm, window_size)
 preds_rnn = online_predict_recurrent(models['RNN'], x_test_norm, window_size, 'rnn')
 preds_lstm = online_predict_recurrent(models['LSTM'], x_test_norm, window_size, 'lstm')
-preds_ltc = online_predict_recurrent(models['LTC'], x_test_norm, window_size, 'ltc')
+preds_ltc = online_predict_recurrent(models['LTC'], x_test_norm, window_size, 'ltc',
+                                     ltc_tau_out=ltc_tau_list)
 
+# 反归一化
 def denorm(y):
     return y * std + mean
 
@@ -211,38 +231,122 @@ preds_lstm_orig = denorm(preds_lstm)
 preds_ltc_orig = denorm(preds_ltc)
 x_test_orig = x_test
 
-# ----------------------------- 6. 可视化 -----------------------------
-def plot_predictions(ax, t, y_true, pred, name):
-    ax.plot(t, y_true, 'gray', linewidth=1, label='True')
-    ax.plot(t, pred, linewidth=1, label=name)
+# ================== 7. 计算测试集MSE（忽略NaN） ==================
+def compute_mse(y_true, y_pred):
+    mask = ~np.isnan(y_pred) & ~np.isnan(y_true)
+    if np.sum(mask) == 0:
+        return float('inf')
+    return np.mean((y_true[mask] - y_pred[mask])**2)
+
+test_mse = {
+    'FNN': compute_mse(x_test_orig, preds_fnn_orig),
+    'RNN': compute_mse(x_test_orig, preds_rnn_orig),
+    'LSTM': compute_mse(x_test_orig, preds_lstm_orig),
+    'LTC': compute_mse(x_test_orig, preds_ltc_orig)
+}
+
+# ================== 8. 保存JSON结果 ==================
+results = {
+    'window_size': window_size,
+    'training_frequency': 0.5,
+    'test_frequency_segments': [0.5, 2.0, 1.0, 0.2],
+    'target_params': TARGET_PARAMS,
+    'model_params': param_counts,
+    'final_train_loss': {name: history[name][-1] for name in models},
+    'test_mse': test_mse
+}
+
+json_path = os.path.join(OUTPUT_DIR, "results.json")
+with open(json_path, 'w') as f:
+    json.dump(results, f, indent=2, default=float)
+print(f"结果已保存至 {json_path}")
+
+# ================== 9. 绘图并保存 ==================
+
+# ---- 图1：训练波形 ----
+fig1, ax1 = plt.subplots(figsize=(10, 3))
+ax1.plot(t_train, x_train, linewidth=0.6)
+ax1.set_title('Training signal (0.5 Hz sine + noise)')
+ax1.set_xlabel('Time (s)')
+ax1.set_ylabel('Amplitude')
+fig1.tight_layout()
+fig1.savefig(os.path.join(OUTPUT_DIR, "training_waveform.png"), dpi=150)
+plt.close(fig1)
+
+# ---- 图2：测试波形（分段频率） ----
+fig2, ax2 = plt.subplots(figsize=(10, 3))
+ax2.plot(t_test, x_test_orig, linewidth=0.6)
+ax2.set_title('Test signal (frequency jumps)')
+ax2.set_xlabel('Time (s)')
+ax2.set_ylabel('Amplitude')
+for t_change in [20, 40, 60]:
+    ax2.axvline(t_change, color='red', linestyle='--', alpha=0.7)
+fig2.tight_layout()
+fig2.savefig(os.path.join(OUTPUT_DIR, "test_waveform.png"), dpi=150)
+plt.close(fig2)
+
+# ---- 图3：对比各模型预测 ----
+fig3, axes3 = plt.subplots(4, 1, figsize=(12, 8), sharex=True)
+plot_items = [('FNN', preds_fnn_orig), ('RNN', preds_rnn_orig),
+              ('LSTM', preds_lstm_orig), ('LTC', preds_ltc_orig)]
+for ax, (name, pred) in zip(axes3, plot_items):
+    ax.plot(t_test, x_test_orig, 'gray', linewidth=1, label='True')
+    ax.plot(t_test, pred, linewidth=1, label=name)
     ax.set_title(name)
     ax.legend()
     ax.set_ylim(-2, 2)
+fig3.tight_layout()
+fig3.savefig(os.path.join(OUTPUT_DIR, "prediction_comparison.png"), dpi=150)
+plt.close(fig3)
 
-fig, axes = plt.subplots(4, 1, figsize=(12, 8), sharex=True)
-plot_predictions(axes[0], t_test, x_test_orig, preds_fnn_orig, 'FNN')
-plot_predictions(axes[1], t_test, x_test_orig, preds_rnn_orig, 'RNN')
-plot_predictions(axes[2], t_test, x_test_orig, preds_lstm_orig, 'LSTM')
-plot_predictions(axes[3], t_test, x_test_orig, preds_ltc_orig, 'LTC')
-plt.tight_layout()
-
+# ---- 图4：滑动MSE ----
 def sliding_mse(y_true, y_pred, window=50):
     mse = []
     for i in range(window, len(y_true)-1):
-        mse.append(np.mean((y_true[i-window:i]-y_pred[i-window:i])**2))
+        mse.append(np.mean((y_true[i-window:i] - y_pred[i-window:i])**2))
     return np.array(mse)
 
-fig2, ax2 = plt.subplots(figsize=(12, 3))
-for name, pred in [('FNN', preds_fnn_orig), ('RNN', preds_rnn_orig),
-                   ('LSTM', preds_lstm_orig), ('LTC', preds_ltc_orig)]:
+fig4, ax4 = plt.subplots(figsize=(12, 3))
+for name, pred in plot_items:
     mse = sliding_mse(x_test_orig, pred)
-    ax2.plot(t_test[51:], mse, label=name)
-ax2.axvline(20, color='gray', linestyle='--', label='freq: 0.5→2Hz')
-ax2.axvline(40, color='gray', linestyle=':', label='freq: 2→1Hz')
-ax2.axvline(60, color='gray', linestyle='-.', label='freq: 1→0.2Hz')
-ax2.set_xlabel('Time')
-ax2.set_ylabel('Sliding MSE')
-ax2.legend()
-ax2.set_title('Online Prediction Error (equal-parameter setting)')
-plt.tight_layout()
-plt.show()
+    ax4.plot(t_test[51:], mse, label=name)
+ax4.axvline(20, color='gray', linestyle='--', label='0.5→2Hz')
+ax4.axvline(40, color='gray', linestyle=':', label='2→1Hz')
+ax4.axvline(60, color='gray', linestyle='-.', label='1→0.2Hz')
+ax4.set_xlabel('Time')
+ax4.set_ylabel('Sliding MSE')
+ax4.legend()
+ax4.set_title('Online Prediction Error (equal-param)')
+fig4.tight_layout()
+fig4.savefig(os.path.join(OUTPUT_DIR, "sliding_mse.png"), dpi=150)
+plt.close(fig4)
+
+# ---- 图5：LTC有效时间常数 tau ----
+if ltc_tau_list:
+    # 转成数组 (steps, units)
+    tau_array = np.array(ltc_tau_list)  # shape: (num_steps, units)
+    num_steps = tau_array.shape[0]
+    # 对应的时间戳：输入时刻 [window_size, n-2]，我们用 t_test[window_size : n-1]
+    tau_times = t_test[window_size : window_size + num_steps]
+
+    fig5, ax5 = plt.subplots(figsize=(12, 4))
+    # 绘制每条神经元的 tau（半透明）
+    for neu in range(tau_array.shape[1]):
+        ax5.plot(tau_times, tau_array[:, neu], alpha=0.3, color='blue', linewidth=0.5)
+    # 绘制均值（粗线）
+    mean_tau = tau_array.mean(axis=1)
+    ax5.plot(tau_times, mean_tau, 'red', linewidth=2, label='Mean τ')
+    ax5.set_title('LTC Effective Time Constant τ (per neuron)')
+    ax5.set_xlabel('Time (s)')
+    ax5.set_ylabel('τ')
+    ax5.legend()
+    for t_change in [20, 40, 60]:
+        ax5.axvline(t_change, color='gray', linestyle='--', alpha=0.5)
+    fig5.tight_layout()
+    fig5.savefig(os.path.join(OUTPUT_DIR, "ltc_tau_dynamics.png"), dpi=150)
+    plt.close(fig5)
+    print(f"τ 图已保存，共 {num_steps} 步")
+else:
+    print("未收集到 tau 数据")
+
+print(f"\n所有输出已保存至文件夹：{OUTPUT_DIR}/")
