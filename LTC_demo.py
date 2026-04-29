@@ -154,6 +154,10 @@ for name, model in models.items():
 
 # ================== 5. 在线预测函数（带tau收集） ==================
 def online_predict_recurrent(model, seq_norm, window_size, cell_type, ltc_tau_out=None):
+    def _sigmoid(v, mu, sigma):
+        """LTC 内部使用的电导激活函数（对数域安全）"""
+        return torch.sigmoid((v - mu) / (sigma + 1e-8))
+
     n = len(seq_norm)
     preds = np.full(n, np.nan, dtype=np.float32)
 
@@ -187,18 +191,37 @@ def online_predict_recurrent(model, seq_norm, window_size, cell_type, ltc_tau_ou
                 out, h = model.ltc(x_t, h)
                 # 安全获取 tau
                 if ltc_tau_out is not None:
-                    tau_now = None
-                    for attr in ['_tau', 'tau', 'cell.tau', 'cell._tau']:
-                        try:
-                            obj = model.ltc
-                            for part in attr.split('.'):
-                                obj = getattr(obj, part)
-                            tau_now = obj.detach().cpu().numpy().squeeze(0)
-                            break
-                        except Exception:
-                            continue
-                    if tau_now is not None:
-                        ltc_tau_out.append(tau_now)
+                    # 取自 model.ltc.rnn_cell 的参数（与 forward 所用一致）
+                    cell = model.ltc.rnn_cell
+                    cm = cell.cm.abs()  # [H]
+                    gleak = cell.gleak.abs()  # [H]
+                    eps = cell._epsilon
+
+                    # 感觉电导 (C=1, 探测显示参数形状为 [1,16] )
+                    sensory_w = cell.sensory_w.view(1, -1)  # [1, H] -> 调整为 [H] 或 [H,1]
+                    sensory_mu = cell.sensory_mu.view(1, -1)
+                    sensory_sigma = cell.sensory_sigma.view(1, -1)
+                    # x_t 形状 [1,1,1] 取 [0,0,:] -> [1]
+                    x_val = x_t[0, 0, :]  # [1]
+                    s_act = sensory_w * _sigmoid(x_val, sensory_mu, sensory_sigma)  # [1,H]
+                    sensory_g = s_act.sum(dim=0)  # [H]
+
+                    # 递归电导
+                    rec_w = cell.w  # [H,H]
+                    rec_mu = cell.mu
+                    rec_sigma = cell.sigma
+                    # h 形状 [1, H] (batch_first 模式下的隐藏状态)
+                    h_current = h if isinstance(h, torch.Tensor) else h[0]  # LTC 返回 h 为张量
+                    h_expand = h_current.unsqueeze(0)  # [1,1,H]
+                    mu_expand = rec_mu.unsqueeze(0)  # [1,H,H]
+                    sigma_expand = rec_sigma.unsqueeze(0)
+                    w_expand = rec_w.unsqueeze(0)
+                    rec_act = w_expand * _sigmoid(h_expand, mu_expand, sigma_expand)  # [1,H,H]
+                    rec_g = rec_act.sum(dim=-1).squeeze(0)  # [H]
+
+                    g_total = gleak + sensory_g + rec_g + eps
+                    tau_now = (cm / g_total).detach().cpu().numpy()  # [H]
+                    ltc_tau_out.append(tau_now)
             preds[t+1] = model.fc(out).cpu().numpy().item()
     return preds
 
@@ -323,20 +346,16 @@ plt.close(fig4)
 
 # ---- 图5：LTC有效时间常数 tau ----
 if ltc_tau_list:
-    # 转成数组 (steps, units)
-    tau_array = np.array(ltc_tau_list)  # shape: (num_steps, units)
+    tau_array = np.array(ltc_tau_list)          # [steps, H]
     num_steps = tau_array.shape[0]
-    # 对应的时间戳：输入时刻 [window_size, n-2]，我们用 t_test[window_size : n-1]
     tau_times = t_test[window_size : window_size + num_steps]
 
     fig5, ax5 = plt.subplots(figsize=(12, 4))
-    # 绘制每条神经元的 tau（半透明）
     for neu in range(tau_array.shape[1]):
         ax5.plot(tau_times, tau_array[:, neu], alpha=0.3, color='blue', linewidth=0.5)
-    # 绘制均值（粗线）
     mean_tau = tau_array.mean(axis=1)
     ax5.plot(tau_times, mean_tau, 'red', linewidth=2, label='Mean τ')
-    ax5.set_title('LTC Effective Time Constant τ (per neuron)')
+    ax5.set_title('LTC Effective Time Constant τ (computed from ODE params)')
     ax5.set_xlabel('Time (s)')
     ax5.set_ylabel('τ')
     ax5.legend()
