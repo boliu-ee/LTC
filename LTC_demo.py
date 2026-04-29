@@ -13,7 +13,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.manual_seed(42)
 np.random.seed(42)
 
-OUTPUT_DIR = "ltc_demo_outputs"          # 输出文件夹
+OUTPUT_DIR = "LTC_demo_outputs"  # 输出文件夹
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ================== 1. 数据生成 ==================
